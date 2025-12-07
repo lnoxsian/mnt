@@ -71,8 +71,15 @@ mount_custom() {
   eval "$partition"
   local device="/dev/$NAME"
   [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]] && { STATUS_MESSAGE="Warning: $device is already mounted at $MOUNTPOINT"; return; }
-  read -erp "Enter custom mount point (absolute path): " custom_mount
-  [[ -z "$custom_mount" ]] && { STATUS_MESSAGE="No mount point entered. Aborting."; return; }
+  read -erp "Enter custom mount point (absolute path, <Enter> for auto, 'q' to cancel): " custom_mount
+  if [[ -z "$custom_mount" ]]; then
+    mount_auto
+    return
+  fi
+  if [[ "$custom_mount" =~ ^[qQ]$ ]]; then
+    STATUS_MESSAGE="Custom mount cancelled."
+    return
+  fi
   if [[ ! -d "$custom_mount" ]]; then
     mkdir -p "$custom_mount"
     STATUS_MESSAGE="Created mount point directory $custom_mount."
