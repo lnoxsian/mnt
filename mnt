@@ -1,21 +1,17 @@
 #!/bin/bash
-
 usage() {
   echo "Usage: sudo $0"
   exit 1
 }
-
 require_sudo() {
   if [[ "$EUID" -ne 0 ]]; then
     echo "This script requires sudo privileges. Please enter the root password."
     exec sudo bash "$0" "$@"
   fi
 }
-
 get_partitions() {
   lsblk -o NAME,LABEL,SIZE,TYPE,MOUNTPOINT -n -P | grep 'TYPE="part"'
 }
-
 display_interface() {
   clear
   local term_width=$(tput cols)
@@ -44,7 +40,6 @@ display_interface() {
   echo "Press 'm' to auto mount, 'e' for custom mount, 'r' to unmount, 'd' to copy mountpoint, 'q' to quit."
   [[ -n "$STATUS_MESSAGE" ]] && { echo ""; echo "$STATUS_MESSAGE"; }
 }
-
 mount_auto() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
@@ -65,7 +60,6 @@ mount_auto() {
     rmdir "$mount_point"
   fi
 }
-
 mount_custom() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
@@ -94,7 +88,6 @@ mount_custom() {
     rmdir "$custom_mount"
   fi
 }
-
 unmount() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
@@ -108,7 +101,6 @@ unmount() {
     STATUS_MESSAGE="Error unmounting $device"
   fi
 }
-
 copy_mountpoint() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
@@ -127,19 +119,17 @@ copy_mountpoint() {
     STATUS_MESSAGE="Could not copy to clipboard: wl-copy, xclip, or xsel are not installed."
   fi
 }
-
 main_loop() {
   while true; do
     display_interface
     read -rsn1 key
-    # check for arrow keys
     if [[ "$key" == $'\x1b' ]]; then read -rsn2 -t 0.1 key2; key="$key$key2"; fi
     case "$key" in
-      $'\x1b[A') # up
+      $'\x1b[A')
         ((CURRENT_SELECTION--))
         ((CURRENT_SELECTION<0)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
         ;;
-      $'\x1b[B') # down
+      $'\x1b[B')
         ((CURRENT_SELECTION++))
         ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=0
         ;;
@@ -173,8 +163,6 @@ main_loop() {
     esac
   done
 }
-
-# ---- SCRIPT ENTRYPOINT ----
 require_sudo
 mapfile -t PARTITIONS < <(get_partitions)
 STATUS_MESSAGE=""
@@ -184,7 +172,6 @@ if [[ "${#PARTITIONS[@]}" -eq 0 ]]; then
 fi
 CURRENT_SELECTION=0
 TOTAL_PARTITIONS=${#PARTITIONS[@]}
-
 trap "tput cnorm; stty echo; clear; exit" INT TERM EXIT
 tput civis
 main_loop
