@@ -16,25 +16,38 @@ get_partitions() {
 
 display_interface() {
   clear
-  echo "------------------------------------------------------------------------------------------"
-  printf "%-1s %-10s %-20s %-10s %-10s %-20s\n" "" "NAME" "LABEL" "SIZE" "TYPE" "MOUNTPOINT"
-  echo "------------------------------------------------------------------------------------------"
+  local term_width=$(tput cols)
+
+  # Column widths: NAME, LABEL, SIZE, TYPE get fixed widths; MOUNTPOINT gets remainder.
+  local col_name=10
+  local col_label=20
+  local col_size=10
+  local col_type=10
+  local col_mount=$((term_width - col_name - col_label - col_size - col_type - 8))
+  if ((col_mount < 10)); then col_mount=10; fi
+
+  local separator
+  separator=$(head -c "$term_width" < /dev/zero | tr '\0' '-')
+  echo "$separator"
+  printf "%-1s %-${col_name}s %-${col_label}s %-${col_size}s %-${col_type}s %-${col_mount}s\n" "" "NAME" "LABEL" "SIZE" "TYPE" "MOUNTPOINT"
+  echo "$separator"
 
   local index=0
   for partition in "${PARTITIONS[@]}"; do
     eval "$partition"
-
     local display_label="${LABEL:--}"
     local display_mountpoint="${MOUNTPOINT:--}"
 
     if [[ "$index" -eq "$CURRENT_SELECTION" ]]; then
-      printf "> %-9s %-20s %-10s %-10s %-20s\n" "$NAME" "$display_label" "$SIZE" "$TYPE" "$display_mountpoint"
+      printf "> %-$((${col_name}-1))s %-${col_label}s %-${col_size}s %-${col_type}s %-${col_mount}s\n" \
+        "$NAME" "$display_label" "$SIZE" "$TYPE" "$display_mountpoint"
     else
-      printf "  %-9s %-20s %-10s %-10s %-20s\n" "$NAME" "$display_label" "$SIZE" "$TYPE" "$display_mountpoint"
+      printf "  %-$((${col_name}-1))s %-${col_label}s %-${col_size}s %-${col_type}s %-${col_mount}s\n" \
+        "$NAME" "$display_label" "$SIZE" "$TYPE" "$display_mountpoint"
     fi
     ((index++))
   done
-  echo "------------------------------------------------------------------------------------------"
+  echo "$separator"
   echo "Press 'e' to mount, 'r' to unmount, 'd' to copy, 'q' to quit."
   if [[ -n "$STATUS_MESSAGE" ]]; then
     echo ""
@@ -89,7 +102,6 @@ do_unmount() {
   umount -l "$DEVICE"
   if [[ $? -eq 0 ]]; then
     STATUS_MESSAGE="**** Unmounted $DEVICE ****"
-
     if [ -d "$MOUNTPOINT" ] && [ -z "$(ls -A "$MOUNTPOINT")" ]; then
       rmdir "$MOUNTPOINT"
       STATUS_MESSAGE+=" and removed mount point $MOUNTPOINT"
@@ -105,7 +117,7 @@ do_copy() {
   DEVICE="/dev/$NAME"
 
   if [[ -z "$MOUNTPOINT" || "$MOUNTPOINT" == "-" ]]; then
-    STATUS_MESSAGE="Warning: $DEVICE is not mounted. Kennat kopi"
+    STATUS_MESSAGE="Warning: $DEVICE is not mounted. Cannot copy"
     return
   fi
 
@@ -114,24 +126,21 @@ do_copy() {
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
     return
   fi
-
   if command -v xclip >/dev/null 2>&1; then
     echo -n "$MOUNTPOINT" | xclip -selection clipboard
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
     return
   fi
-
   if command -v xsel >/dev/null 2>&1; then
     echo -n "$MOUNTPOINT" | xsel --clipboard --input
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
     return
   fi
-
-  STATUS_MESSAGE="Clipboard'a kopyalanamadı: wl-copy, xclip veya xsel yüklü değil"
+  STATUS_MESSAGE="Could not copy to clipboard: wl-copy, xclip, or xsel are not installed."
   return 1
 }
 
-# Başlangıç
+# Initialization
 mapfile -t PARTITIONS < <(get_partitions)
 STATUS_MESSAGE=""
 
@@ -170,7 +179,6 @@ while true; do
       CURRENT_SELECTION=0
     fi
     ;;
-
   e | E)
     do_mount
     mapfile -t PARTITIONS < <(get_partitions)
@@ -192,7 +200,6 @@ while true; do
     ;;
   d | D)
     do_copy
-    mapfile -t PARTITIONS < <(get_partitions)
     mapfile -t PARTITIONS < <(get_partitions)
     TOTAL_PARTITIONS=${#PARTITIONS[@]}
     if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
