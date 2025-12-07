@@ -18,7 +18,6 @@ display_interface() {
   clear
   local term_width=$(tput cols)
 
-  # Column widths: NAME, LABEL, SIZE, TYPE get fixed widths; MOUNTPOINT gets remainder.
   local col_name=10
   local col_label=20
   local col_size=10
@@ -37,7 +36,6 @@ display_interface() {
     eval "$partition"
     local display_label="${LABEL:--}"
     local display_mountpoint="${MOUNTPOINT:--}"
-
     if [[ "$index" -eq "$CURRENT_SELECTION" ]]; then
       printf "> %-$((${col_name}-1))s %-${col_label}s %-${col_size}s %-${col_type}s %-${col_mount}s\n" \
         "$NAME" "$display_label" "$SIZE" "$TYPE" "$display_mountpoint"
@@ -48,14 +46,14 @@ display_interface() {
     ((index++))
   done
   echo "$separator"
-  echo "Press 'm' to mount, 'r' to unmount, 'd' to copy, 'q' to quit."
+  echo "Press 'm' to mount, 'e' to manually enter mount point, 'r' to unmount, 'd' to copy, 'q' to quit."
   if [[ -n "$STATUS_MESSAGE" ]]; then
     echo ""
     echo "$STATUS_MESSAGE"
   fi
 }
 
-do_mount() {
+do_mount_auto() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
   DEVICE="/dev/$NAME"
@@ -68,11 +66,9 @@ do_mount() {
   eval $(blkid -o udev "$DEVICE")
   LABEL=${ID_FS_LABEL:-$NAME}
   LABEL="${LABEL// /_}"
-
   if grep -q " /media/$LABEL " /etc/mtab; then
     LABEL="${LABEL}-$NAME"
   fi
-
   MOUNT_POINT="/media/$LABEL"
   mkdir -p "$MOUNT_POINT"
 
@@ -86,6 +82,37 @@ do_mount() {
   else
     STATUS_MESSAGE="Error mounting $DEVICE"
     rmdir "$MOUNT_POINT"
+  fi
+}
+
+do_mount_custom() {
+  local partition="${PARTITIONS[$CURRENT_SELECTION]}"
+  eval "$partition"
+  DEVICE="/dev/$NAME"
+
+  if [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]]; then
+    STATUS_MESSAGE="Warning: $DEVICE is already mounted at $MOUNTPOINT"
+    return
+  fi
+
+  read -p "Enter custom mount point (absolute path): " custom_mount
+  if [[ -z "$custom_mount" ]]; then
+    STATUS_MESSAGE="No mount point entered. Aborting."
+    return
+  fi
+
+  mkdir -p "$custom_mount"
+  OPTS="rw,relatime"
+  eval $(blkid -o udev "$DEVICE")
+  if [[ "$ID_FS_TYPE" == "vfat" ]]; then
+    OPTS+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
+  fi
+
+  if mount -o "$OPTS" "$DEVICE" "$custom_mount"; then
+    STATUS_MESSAGE="**** Mounted $DEVICE at $custom_mount ****"
+  else
+    STATUS_MESSAGE="Error mounting $DEVICE"
+    rmdir "$custom_mount"
   fi
 }
 
@@ -158,54 +185,59 @@ tput civis
 
 while true; do
   display_interface
-
   read -rsn1 key
-
   if [[ "$key" == $'\x1b' ]]; then
     read -rsn2 -t 0.1 key2
     key="$key$key2"
   fi
-
   case "$key" in
-  $'\x1b[A') # up
-    ((CURRENT_SELECTION--))
-    if [[ "$CURRENT_SELECTION" -lt 0 ]]; then
-      CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-    fi
-    ;;
-  $'\x1b[B') # down
-    ((CURRENT_SELECTION++))
-    if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-      CURRENT_SELECTION=0
-    fi
-    ;;
-  m | M)
-    do_mount
-    mapfile -t PARTITIONS < <(get_partitions)
-    TOTAL_PARTITIONS=${#PARTITIONS[@]}
-    if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-      CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-    fi
-    ;;
-  r | R)
-    do_unmount
-    mapfile -t PARTITIONS < <(get_partitions)
-    TOTAL_PARTITIONS=${#PARTITIONS[@]}
-    if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-      CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-    fi
-    ;;
-  q | Q)
-    break
-    ;;
-  d | D)
-    do_copy
-    mapfile -t PARTITIONS < <(get_partitions)
-    TOTAL_PARTITIONS=${#PARTITIONS[@]}
-    if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-      CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-    fi
-    ;;
+    $'\x1b[A') # up
+      ((CURRENT_SELECTION--))
+      if [[ "$CURRENT_SELECTION" -lt 0 ]]; then
+        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+      fi
+      ;;
+    $'\x1b[B') # down
+      ((CURRENT_SELECTION++))
+      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
+        CURRENT_SELECTION=0
+      fi
+      ;;
+    m | M)
+      do_mount_auto
+      mapfile -t PARTITIONS < <(get_partitions)
+      TOTAL_PARTITIONS=${#PARTITIONS[@]}
+      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
+        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+      fi
+      ;;
+    e | E)
+      do_mount_custom
+      mapfile -t PARTITIONS < <(get_partitions)
+      TOTAL_PARTITIONS=${#PARTITIONS[@]}
+      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
+        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+      fi
+      ;;
+    r | R)
+      do_unmount
+      mapfile -t PARTITIONS < <(get_partitions)
+      TOTAL_PARTITIONS=${#PARTITIONS[@]}
+      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
+        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+      fi
+      ;;
+    d | D)
+      do_copy
+      mapfile -t PARTITIONS < <(get_partitions)
+      TOTAL_PARTITIONS=${#PARTITIONS[@]}
+      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
+        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+      fi
+      ;;
+    q | Q)
+      break
+      ;;
   esac
 done
 
