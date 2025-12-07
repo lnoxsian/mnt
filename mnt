@@ -48,7 +48,7 @@ display_interface() {
     ((index++))
   done
   echo "$separator"
-  echo "Press 'e' to mount, 'r' to unmount, 'd' to copy, 'q' to quit."
+  echo "Press 'm' to mount, 'r' to unmount, 'd' to copy, 'q' to quit."
   if [[ -n "$STATUS_MESSAGE" ]]; then
     echo ""
     echo "$STATUS_MESSAGE"
@@ -179,7 +179,7 @@ while true; do
       CURRENT_SELECTION=0
     fi
     ;;
-  e | E)
+  m | M)
     do_mount
     mapfile -t PARTITIONS < <(get_partitions)
     TOTAL_PARTITIONS=${#PARTITIONS[@]}
