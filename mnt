@@ -5,10 +5,12 @@ usage() {
   exit 1
 }
 
-if [[ "$EUID" -ne 0 ]]; then
-  echo "This script requires sudo privileges. Please enter the root password."
-  exec sudo bash "$0" "$@"
-fi
+require_sudo() {
+  if [[ "$EUID" -ne 0 ]]; then
+    echo "This script requires sudo privileges. Please enter the root password."
+    exec sudo bash "$0" "$@"
+  fi
+}
 
 get_partitions() {
   lsblk -o NAME,LABEL,SIZE,TYPE,MOUNTPOINT -n -P | grep 'TYPE="part"'
@@ -17,20 +19,13 @@ get_partitions() {
 display_interface() {
   clear
   local term_width=$(tput cols)
-
-  local col_name=10
-  local col_label=20
-  local col_size=10
-  local col_type=10
-  local col_mount=$((term_width - col_name - col_label - col_size - col_type - 8))
-  if ((col_mount < 10)); then col_mount=10; fi
-
+  local col_name=10 col_label=20 col_size=10 col_type=10 col_mount=$((term_width - col_name - col_label - col_size - col_type - 8))
+  ((col_mount < 10)) && col_mount=10
   local separator
   separator=$(head -c "$term_width" < /dev/zero | tr '\0' '-')
   echo "$separator"
   printf "%-1s %-${col_name}s %-${col_label}s %-${col_size}s %-${col_type}s %-${col_mount}s\n" "" "NAME" "LABEL" "SIZE" "TYPE" "MOUNTPOINT"
   echo "$separator"
-
   local index=0
   for partition in "${PARTITIONS[@]}"; do
     eval "$partition"
@@ -46,200 +41,145 @@ display_interface() {
     ((index++))
   done
   echo "$separator"
-  echo "Press 'm' to mount, 'e' to manually enter mount point, 'r' to unmount, 'd' to copy, 'q' to quit."
-  if [[ -n "$STATUS_MESSAGE" ]]; then
-    echo ""
-    echo "$STATUS_MESSAGE"
+  echo "Press 'm' to auto mount, 'e' for custom mount, 'r' to unmount, 'd' to copy mountpoint, 'q' to quit."
+  [[ -n "$STATUS_MESSAGE" ]] && { echo ""; echo "$STATUS_MESSAGE"; }
+}
+
+mount_auto() {
+  local partition="${PARTITIONS[$CURRENT_SELECTION]}"
+  eval "$partition"
+  local device="/dev/$NAME"
+  [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]] && { STATUS_MESSAGE="Warning: $device is already mounted at $MOUNTPOINT"; return; }
+  eval $(blkid -o udev "$device")
+  local label="${ID_FS_LABEL:-$NAME}"
+  label="${label// /_}"
+  grep -q " /media/$label " /etc/mtab && label="${label}-$NAME"
+  local mount_point="/media/$label"
+  mkdir -p "$mount_point"
+  local opts="rw,relatime"
+  [[ "$ID_FS_TYPE" == "vfat" ]] && opts+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
+  if mount -o "$opts" "$device" "$mount_point"; then
+    STATUS_MESSAGE="**** Mounted $device at $mount_point ****"
+  else
+    STATUS_MESSAGE="Error mounting $device"
+    rmdir "$mount_point"
   fi
 }
 
-do_mount_auto() {
+mount_custom() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
-  DEVICE="/dev/$NAME"
-
-  if [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]]; then
-    STATUS_MESSAGE="Warning: $DEVICE is already mounted at $MOUNTPOINT"
-    return
+  local device="/dev/$NAME"
+  [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]] && { STATUS_MESSAGE="Warning: $device is already mounted at $MOUNTPOINT"; return; }
+  read -erp "Enter custom mount point (absolute path): " custom_mount
+  [[ -z "$custom_mount" ]] && { STATUS_MESSAGE="No mount point entered. Aborting."; return; }
+  if [[ ! -d "$custom_mount" ]]; then
+    mkdir -p "$custom_mount"
+    STATUS_MESSAGE="Created mount point directory $custom_mount."
   fi
-
-  eval $(blkid -o udev "$DEVICE")
-  LABEL=${ID_FS_LABEL:-$NAME}
-  LABEL="${LABEL// /_}"
-  if grep -q " /media/$LABEL " /etc/mtab; then
-    LABEL="${LABEL}-$NAME"
-  fi
-  MOUNT_POINT="/media/$LABEL"
-  mkdir -p "$MOUNT_POINT"
-
-  OPTS="rw,relatime"
-  if [[ "$ID_FS_TYPE" == "vfat" ]]; then
-    OPTS+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
-  fi
-
-  if mount -o "$OPTS" "$DEVICE" "$MOUNT_POINT"; then
-    STATUS_MESSAGE="**** Mounted $DEVICE at $MOUNT_POINT ****"
+  local opts="rw,relatime"
+  eval $(blkid -o udev "$device")
+  [[ "$ID_FS_TYPE" == "vfat" ]] && opts+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
+  if mount -o "$opts" "$device" "$custom_mount"; then
+    STATUS_MESSAGE+=" **** Mounted $device at $custom_mount ****"
   else
-    STATUS_MESSAGE="Error mounting $DEVICE"
-    rmdir "$MOUNT_POINT"
-  fi
-}
-
-do_mount_custom() {
-  local partition="${PARTITIONS[$CURRENT_SELECTION]}"
-  eval "$partition"
-  DEVICE="/dev/$NAME"
-
-  if [[ -n "$MOUNTPOINT" && "$MOUNTPOINT" != "-" ]]; then
-    STATUS_MESSAGE="Warning: $DEVICE is already mounted at $MOUNTPOINT"
-    return
-  fi
-
-  read -p "Enter custom mount point (absolute path): " custom_mount
-  if [[ -z "$custom_mount" ]]; then
-    STATUS_MESSAGE="No mount point entered. Aborting."
-    return
-  fi
-
-  mkdir -p "$custom_mount"
-  OPTS="rw,relatime"
-  eval $(blkid -o udev "$DEVICE")
-  if [[ "$ID_FS_TYPE" == "vfat" ]]; then
-    OPTS+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
-  fi
-
-  if mount -o "$OPTS" "$DEVICE" "$custom_mount"; then
-    STATUS_MESSAGE="**** Mounted $DEVICE at $custom_mount ****"
-  else
-    STATUS_MESSAGE="Error mounting $DEVICE"
+    STATUS_MESSAGE="Error mounting $device"
     rmdir "$custom_mount"
   fi
 }
 
-do_unmount() {
+unmount() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
-  DEVICE="/dev/$NAME"
-
-  if [[ -z "$MOUNTPOINT" || "$MOUNTPOINT" == "-" ]]; then
-    STATUS_MESSAGE="Warning: $DEVICE is not mounted"
-    return
-  fi
-
-  umount -l "$DEVICE"
+  local device="/dev/$NAME"
+  [[ -z "$MOUNTPOINT" || "$MOUNTPOINT" == "-" ]] && { STATUS_MESSAGE="Warning: $device is not mounted"; return; }
+  umount -l "$device"
   if [[ $? -eq 0 ]]; then
-    STATUS_MESSAGE="**** Unmounted $DEVICE ****"
-    if [ -d "$MOUNTPOINT" ] && [ -z "$(ls -A "$MOUNTPOINT")" ]; then
-      rmdir "$MOUNTPOINT"
-      STATUS_MESSAGE+=" and removed mount point $MOUNTPOINT"
-    fi
+    STATUS_MESSAGE="**** Unmounted $device ****"
+    [[ -d "$MOUNTPOINT" && -z "$(ls -A "$MOUNTPOINT")" ]] && { rmdir "$MOUNTPOINT"; STATUS_MESSAGE+=" and removed $MOUNTPOINT"; }
   else
-    STATUS_MESSAGE="Error unmounting $DEVICE"
+    STATUS_MESSAGE="Error unmounting $device"
   fi
 }
 
-do_copy() {
+copy_mountpoint() {
   local partition="${PARTITIONS[$CURRENT_SELECTION]}"
   eval "$partition"
-  DEVICE="/dev/$NAME"
-
-  if [[ -z "$MOUNTPOINT" || "$MOUNTPOINT" == "-" ]]; then
-    STATUS_MESSAGE="Warning: $DEVICE is not mounted. Cannot copy"
-    return
-  fi
-
+  local device="/dev/$NAME"
+  [[ -z "$MOUNTPOINT" || "$MOUNTPOINT" == "-" ]] && { STATUS_MESSAGE="Warning: $device is not mounted. Cannot copy."; return; }
   if command -v wl-copy >/dev/null 2>&1; then
     echo -n "$MOUNTPOINT" | wl-copy
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
-    return
-  fi
-  if command -v xclip >/dev/null 2>&1; then
+  elif command -v xclip >/dev/null 2>&1; then
     echo -n "$MOUNTPOINT" | xclip -selection clipboard
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
-    return
-  fi
-  if command -v xsel >/dev/null 2>&1; then
+  elif command -v xsel >/dev/null 2>&1; then
     echo -n "$MOUNTPOINT" | xsel --clipboard --input
     STATUS_MESSAGE="$MOUNTPOINT copied to the clipboard."
-    return
+  else
+    STATUS_MESSAGE="Could not copy to clipboard: wl-copy, xclip, or xsel are not installed."
   fi
-  STATUS_MESSAGE="Could not copy to clipboard: wl-copy, xclip, or xsel are not installed."
-  return 1
 }
 
-# Initialization
+main_loop() {
+  while true; do
+    display_interface
+    read -rsn1 key
+    # check for arrow keys
+    if [[ "$key" == $'\x1b' ]]; then read -rsn2 -t 0.1 key2; key="$key$key2"; fi
+    case "$key" in
+      $'\x1b[A') # up
+        ((CURRENT_SELECTION--))
+        ((CURRENT_SELECTION<0)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+        ;;
+      $'\x1b[B') # down
+        ((CURRENT_SELECTION++))
+        ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=0
+        ;;
+      m|M)
+        mount_auto
+        mapfile -t PARTITIONS < <(get_partitions)
+        TOTAL_PARTITIONS=${#PARTITIONS[@]}
+        ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+        ;;
+      e|E)
+        mount_custom
+        mapfile -t PARTITIONS < <(get_partitions)
+        TOTAL_PARTITIONS=${#PARTITIONS[@]}
+        ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+        ;;
+      r|R)
+        unmount
+        mapfile -t PARTITIONS < <(get_partitions)
+        TOTAL_PARTITIONS=${#PARTITIONS[@]}
+        ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+        ;;
+      d|D)
+        copy_mountpoint
+        mapfile -t PARTITIONS < <(get_partitions)
+        TOTAL_PARTITIONS=${#PARTITIONS[@]}
+        ((CURRENT_SELECTION>=TOTAL_PARTITIONS)) && CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
+        ;;
+      q|Q)
+        break
+        ;;
+    esac
+  done
+}
+
+# ---- SCRIPT ENTRYPOINT ----
+require_sudo
 mapfile -t PARTITIONS < <(get_partitions)
 STATUS_MESSAGE=""
-
 if [[ "${#PARTITIONS[@]}" -eq 0 ]]; then
   echo "No partitions found. Exiting."
   exit 1
 fi
-
 CURRENT_SELECTION=0
 TOTAL_PARTITIONS=${#PARTITIONS[@]}
 
 trap "tput cnorm; stty echo; clear; exit" INT TERM EXIT
-
 tput civis
-
-while true; do
-  display_interface
-  read -rsn1 key
-  if [[ "$key" == $'\x1b' ]]; then
-    read -rsn2 -t 0.1 key2
-    key="$key$key2"
-  fi
-  case "$key" in
-    $'\x1b[A') # up
-      ((CURRENT_SELECTION--))
-      if [[ "$CURRENT_SELECTION" -lt 0 ]]; then
-        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-      fi
-      ;;
-    $'\x1b[B') # down
-      ((CURRENT_SELECTION++))
-      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-        CURRENT_SELECTION=0
-      fi
-      ;;
-    m | M)
-      do_mount_auto
-      mapfile -t PARTITIONS < <(get_partitions)
-      TOTAL_PARTITIONS=${#PARTITIONS[@]}
-      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-      fi
-      ;;
-    e | E)
-      do_mount_custom
-      mapfile -t PARTITIONS < <(get_partitions)
-      TOTAL_PARTITIONS=${#PARTITIONS[@]}
-      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-      fi
-      ;;
-    r | R)
-      do_unmount
-      mapfile -t PARTITIONS < <(get_partitions)
-      TOTAL_PARTITIONS=${#PARTITIONS[@]}
-      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-      fi
-      ;;
-    d | D)
-      do_copy
-      mapfile -t PARTITIONS < <(get_partitions)
-      TOTAL_PARTITIONS=${#PARTITIONS[@]}
-      if [[ "$CURRENT_SELECTION" -ge "$TOTAL_PARTITIONS" ]]; then
-        CURRENT_SELECTION=$((TOTAL_PARTITIONS - 1))
-      fi
-      ;;
-    q | Q)
-      break
-      ;;
-  esac
-done
-
+main_loop
 tput cnorm
 clear
